@@ -221,6 +221,36 @@ If the node is offline, the packet is silently dropped. HA marks the entity `una
 
 ---
 
+## 🗺️ Floorplan-Hub
+
+If [Floorplan-Hub](https://github.com/Chance-Konstruktion/ha-floorplan-hub) is
+installed, the mesh appears on the floor plan by itself — no card, no YAML,
+nothing to configure. If it is not installed, nothing here does anything at
+all: the adapter writes a dict into `hass.data` that nobody reads.
+
+What it draws is only what this integration actually knows. It cannot measure
+the path between two ESP nodes — they broadcast and we listen — so inventing
+node-to-node links would be a lie. Instead: Home Assistant in the middle, one
+edge out to each unit, coloured by how long ago that unit was last heard from.
+
+| | |
+|---|---|
+| green | heard from within the last 40s |
+| amber | quiet, but not yet timed out — **about to drop off** |
+| red | offline |
+
+The amber band is the useful part: a node on its way out is visible before it
+is gone. Edges are dashed, because nothing measured them.
+
+Each node sits in the area you already gave its device — the adapter reads the
+device registry rather than asking you to place it a second time. Every node
+offers a **Neu abfragen** action that triggers the same targeted resync the
+integration uses after a command.
+
+The adapter is one file, `floorplan.py`, plus a vendored copy of the hub's
+provider shim. There is no dependency on the hub in `manifest.json`, and load
+order does not matter.
+
 ## 📚 Reference
 
 <details>
