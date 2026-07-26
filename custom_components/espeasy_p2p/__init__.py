@@ -27,6 +27,7 @@ from .const import (
     SERVICE_SET_GPIO_PIN,
 )
 from .coordinator import ESPEasyP2PCoordinator
+from .floorplan import async_setup_floorplan
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Optional: puts the mesh on Floorplan-Hub's plan when that is
+    # installed, and costs nothing when it is not.
+    async_setup_floorplan(hass, entry, coordinator)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
