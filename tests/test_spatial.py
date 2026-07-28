@@ -12,10 +12,10 @@ from __future__ import annotations
 import pytest
 
 from espeasy_p2p_files import const  # noqa: E402  (conftest builds it)
-from espeasy_p2p_files.floorplan import HUB_ID, async_setup_floorplan
+from espeasy_p2p_files.spatial import HUB_ID, async_setup_spatial
 from homeassistant.helpers import device_registry as dr
 
-from .floorplan_hub_conformance import FakeHass, FloorplanHubConformance, check
+from .spatial_hub_conformance import FakeHass, SpatialHubConformance, check
 
 
 class FakeNode:
@@ -68,7 +68,7 @@ def mesh(monkeypatch):
     coordinator.offline = {9}
 
     hass, entry = FakeHass(), FakeEntry()
-    async_setup_floorplan(hass, entry, coordinator)
+    async_setup_spatial(hass, entry, coordinator)
     return hass, entry, coordinator
 
 
@@ -79,7 +79,7 @@ def _payload(hass):
 # ── The contract ──────────────────────────────────────────
 
 
-class TestFloorplanHub(FloorplanHubConformance):
+class TestSpatialHub(SpatialHubConformance):
     """The kit a stranger would run, run on ourselves."""
 
     def build_registration(self):
@@ -87,7 +87,7 @@ class TestFloorplanHub(FloorplanHubConformance):
         coordinator.nodes = {5: FakeNode(5, "Garage")}
         coordinator.last_seen = {5: 0.0}
         hass = FakeHass()
-        async_setup_floorplan(hass, FakeEntry(), coordinator)
+        async_setup_spatial(hass, FakeEntry(), coordinator)
         return hass.registrations["espeasy_p2p"]
 
 
@@ -95,7 +95,7 @@ def test_an_empty_mesh_is_not_an_error(mesh):
     """Before the first packet there is one node: us. Not a crash."""
     coordinator = FakeCoordinator()
     hass = FakeHass()
-    async_setup_floorplan(hass, FakeEntry(), coordinator)
+    async_setup_spatial(hass, FakeEntry(), coordinator)
 
     payload = _payload(hass)
 
@@ -186,7 +186,7 @@ def test_the_hub_hears_about_a_new_node_without_a_coordinator(mesh):
     _, entry, _ = mesh
     told: list[str] = []
     dispatcher.async_dispatcher_connect(
-        None, "floorplan_hub_data_updated", told.append
+        None, "spatial_hub_data_updated", told.append
     )
 
     dispatcher.async_dispatcher_send(
@@ -205,7 +205,7 @@ def test_unloading_stops_the_chatter(mesh):
     hass, entry, _ = mesh
     told: list[str] = []
     dispatcher.async_dispatcher_connect(
-        None, "floorplan_hub_data_updated", told.append
+        None, "spatial_hub_data_updated", told.append
     )
 
     for unload in entry.unloads:

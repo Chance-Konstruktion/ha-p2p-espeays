@@ -221,9 +221,9 @@ If the node is offline, the packet is silently dropped. HA marks the entity `una
 
 ---
 
-## 🗺️ Floorplan-Hub
+## 🗺️ Spatial Hub
 
-If [Floorplan-Hub](https://github.com/Chance-Konstruktion/ha-floorplan-hub) is
+If [Spatial Hub](https://github.com/Chance-Konstruktion/ha-spatial-hub) is
 installed, the mesh appears on the floor plan by itself — no card, no YAML,
 nothing to configure. If it is not installed, nothing here does anything at
 all: the adapter writes a dict into `hass.data` that nobody reads.
@@ -247,7 +247,7 @@ device registry rather than asking you to place it a second time. Every node
 offers a **Neu abfragen** action that triggers the same targeted resync the
 integration uses after a command.
 
-The adapter is one file, `floorplan.py`, plus a vendored copy of the hub's
+The adapter is one file, `spatial.py`, plus a vendored copy of the hub's
 provider shim. There is no dependency on the hub in `manifest.json`, and load
 order does not matter.
 
