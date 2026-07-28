@@ -54,17 +54,52 @@ def _quality(silent_for: float | None) -> str:
     return "poor"
 
 
-def _area_of(hass: HomeAssistant, unit: int) -> str | None:
-    """The area the user put this node's device in, if they did.
+def _device_of(hass: HomeAssistant, unit: int) -> Any:
+    """This unit's device in the registry, if it has been created yet.
 
     The device is created by the coordinator anyway, so the user has
     already had the chance to say where it hangs -- asking again in a
     floor-plan editor is the work this whole project exists to avoid.
     """
-    device = dr.async_get(hass).async_get_device(
+    return dr.async_get(hass).async_get_device(
         identifiers={(DOMAIN, f"unit-{unit}")}
     )
-    return device.area_id if device else None
+
+
+def _entity_of(hass: HomeAssistant, device: Any) -> str | None:
+    """One entity of this unit, to hang the popup's doors on.
+
+    Naming an entity is the shortest possible node definition, and the hub
+    is built around that: from one entity it finds the device, and from
+    the device every other entity the unit has. Sending nodes without one
+    is why the popup came up empty -- no more-info, no device page, no way
+    through to the settings. It read as "this thing has nothing", when in
+    fact nothing had been offered.
+
+    Which entity it is hardly matters, as long as it is always the same
+    one, so the popup does not reshuffle between two refreshes.
+    """
+    if device is None:
+        return None
+    try:
+        from homeassistant.helpers import entity_registry as er
+
+        entries = er.async_entries_for_device(
+            er.async_get(hass), device.id, include_disabled_entities=False
+        )
+    except Exception:  # noqa: BLE001 - a popup is never worth an exception
+        return None
+    if not entries:
+        return None
+    # Diagnostics last: a unit should open as the thing it is, not as its
+    # uptime counter.
+    return sorted(
+        entries,
+        key=lambda entry: (
+            getattr(entry, "entity_category", None) is not None,
+            entry.entity_id,
+        ),
+    )[0].entity_id
 
 
 def async_setup_spatial(
@@ -90,11 +125,13 @@ def async_setup_spatial(
             seen = coordinator.last_seen.get(unit)
             silent_for = None if seen is None else round(now - seen, 1)
             online = coordinator.is_unit_online(unit)
+            device = _device_of(hass, unit)
             nodes.append(
                 node(
                     f"unit-{unit}",
                     label=info.name or f"Unit {unit}",
-                    area_id=_area_of(hass, unit),
+                    entity_id=_entity_of(hass, device),
+                    area_id=device.area_id if device else None,
                     state="online" if online else "offline",
                     icon="mdi:chip" if online else "mdi:chip-off",
                     actions=[action("resync", "Neu abfragen")],

@@ -58,24 +58,54 @@ if "homeassistant" not in sys.modules:
     device_registry = _module("homeassistant.helpers.device_registry")
 
     class _Device:
-        def __init__(self, area_id: str | None) -> None:
+        def __init__(self, device_id: str, area_id: str | None) -> None:
+            self.id = device_id
             self.area_id = area_id
 
     class _Registry:
-        """Areas the user assigned, keyed by the device identifiers."""
+        """Devices the user already placed, keyed by their identifiers.
+
+        A device exists for every unit the coordinator has seen; `areas`
+        only records the ones the user actually assigned a room to.
+        """
 
         def __init__(self) -> None:
             self.areas: dict[tuple, str] = {}
+            self.known: set = set()
 
         def async_get_device(self, identifiers):
             for identifier in identifiers:
-                if identifier in self.areas:
-                    return _Device(self.areas[identifier])
+                if identifier in self.areas or identifier in self.known:
+                    return _Device(f"dev-{identifier[1]}",
+                                   self.areas.get(identifier))
             return None
 
     _registry = _Registry()
     device_registry.async_get = lambda hass: _registry
     device_registry.registry = _registry
+
+    # The entity registry, for the one question the adapter asks it: which
+    # entities does this device have?
+    entity_registry = _module("homeassistant.helpers.entity_registry")
+
+    class _Entry:
+        def __init__(self, entity_id: str, entity_category=None) -> None:
+            self.entity_id = entity_id
+            self.entity_category = entity_category
+
+    class _EntityRegistry:
+        def __init__(self) -> None:
+            # device id -> list of _Entry
+            self.entities: dict[str, list] = {}
+
+    _entities = _EntityRegistry()
+    entity_registry.async_get = lambda hass: _entities
+    entity_registry.async_entries_for_device = (
+        lambda registry, device_id, include_disabled_entities=False:
+        registry.entities.get(device_id, [])
+    )
+    entity_registry.registry = _entities
+    entity_registry.Entry = _Entry
 
 
 # The integration's own package __init__ pulls in half of Home Assistant to
