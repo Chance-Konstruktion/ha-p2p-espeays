@@ -1,4 +1,4 @@
-"""Put the P2P mesh on Floorplan-Hub's floor plan, if it is installed.
+"""Put the P2P mesh on Spatial Hub's floor plan, if it is installed.
 
 What this integration actually knows about topology is one thing: which
 units have been heard from, and how long ago. It does not measure link
@@ -10,7 +10,7 @@ That makes a node about to fall off the mesh visible before it does,
 which is the thing a floor plan is actually good for.
 
 Nothing here is required for the integration to work. With no hub
-installed, `floorplan_provider` writes a dict nobody reads.
+installed, `spatial_provider` writes a dict nobody reads.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from .const import (
     SIGNAL_NODE_DISCOVERED,
     SIGNAL_NODE_REMOVED,
 )
-from .floorplan_hub_provider import action, edge, floorplan_provider, node
+from .spatial_hub_provider import action, edge, spatial_provider, node
 
 # The hub's own node, so the star has a centre. Namespaced by the provider
 # id like everything else, so it cannot collide with a unit id.
@@ -67,7 +67,7 @@ def _area_of(hass: HomeAssistant, unit: int) -> str | None:
     return device.area_id if device else None
 
 
-def async_setup_floorplan(
+def async_setup_spatial(
     hass: HomeAssistant, entry: Any, coordinator: Any
 ) -> None:
     """One call, and the mesh is on the plan."""
@@ -126,7 +126,7 @@ def async_setup_floorplan(
         coordinator.async_schedule_resync(int(item_id.removeprefix("unit-")))
         return {"success": True}
 
-    floorplan_provider(
+    spatial_provider(
         hass,
         entry,
         name="ESPEasy P2P",

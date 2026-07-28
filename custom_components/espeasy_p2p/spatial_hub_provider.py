@@ -1,16 +1,16 @@
-"""Floorplan-Hub provider shim -- copy this file into your integration.
+"""Spatial Hub provider shim -- copy this file into your integration.
 
 Copy, do not import. The hub may not be installed, may be a different
 version, or may be removed while your integration keeps running. This file
-therefore has zero imports from ``floorplan_hub``: it writes a dict into
+therefore has zero imports from ``spatial_hub``: it writes a dict into
 ``hass.data`` and fires dispatcher signals, both of which cost nothing when
 nobody is listening.
 
 The whole integration usually looks like this, inside ``async_setup_entry``::
 
-    from .floorplan_hub_provider import floorplan_provider
+    from .spatial_hub_provider import spatial_provider
 
-    floorplan_provider(
+    spatial_provider(
         hass,
         entry,
         name="My Integration",
@@ -19,7 +19,7 @@ The whole integration usually looks like this, inside ``async_setup_entry``::
         coordinator=coordinator,
     )
 
-That is the complete integration. ``floorplan_provider`` registers,
+That is the complete integration. ``spatial_provider`` registers,
 withdraws on unload, and re-notifies the hub on every coordinator update --
 you never call register/unregister/notify yourself.
 
@@ -31,6 +31,7 @@ area, icon and state, so the hub fills those in. Use :func:`node` and
 from __future__ import annotations
 
 import logging
+from enum import StrEnum
 from typing import Any, Callable, Iterable
 
 from homeassistant.core import HomeAssistant, callback
@@ -42,10 +43,10 @@ from homeassistant.helpers.dispatcher import (
 _LOGGER = logging.getLogger(__name__)
 
 # ── Frozen contract strings (must match the hub verbatim) ─────────────
-DATA_PROVIDERS = "floorplan_hub_providers"
-SIGNAL_PROVIDER_REGISTERED = "floorplan_hub_provider_registered"
-SIGNAL_PROVIDER_REMOVED = "floorplan_hub_provider_removed"
-SIGNAL_DATA_UPDATED = "floorplan_hub_data_updated"
+DATA_PROVIDERS = "spatial_hub_providers"
+SIGNAL_PROVIDER_REGISTERED = "spatial_hub_provider_registered"
+SIGNAL_PROVIDER_REMOVED = "spatial_hub_provider_removed"
+SIGNAL_DATA_UPDATED = "spatial_hub_data_updated"
 API_VERSION = 1
 
 # Which revision of *this file* you copied. It travels with the
@@ -55,11 +56,41 @@ API_VERSION = 1
 #
 # Bumped only when the shim gains something worth going back for. The
 # contract above is frozen; this is not part of it.
-SDK_VERSION = 3
+SDK_VERSION = 4
+
+# ── Spatial vocabulary (Specification 1.0) ───────────────────────────
+#
+# Copied, like everything else in this file. Compare against these rather
+# than against a literal: "outside" is the mistake this exists to prevent.
+class AreaKind(StrEnum):
+    """What an area is. Specification 1.0 § Area Type."""
+
+    INDOOR = "indoor"
+    OUTDOOR = "outdoor"
+    VIRTUAL = "virtual"
+
+
+class NodeState(StrEnum):
+    """The states every renderer is expected to style. § Node."""
+
+    ONLINE = "online"
+    OFFLINE = "offline"
+    ON = "on"
+    OFF = "off"
+    UNKNOWN = "unknown"
+
+
+class EdgeQuality(StrEnum):
+    """How good a connection is. § Edge."""
+
+    GOOD = "good"
+    FAIR = "fair"
+    POOR = "poor"
+    UNKNOWN = "unknown"
 
 
 @callback
-def floorplan_provider(
+def spatial_provider(
     hass: HomeAssistant,
     entry: Any,
     name: str,
@@ -71,11 +102,12 @@ def floorplan_provider(
     capabilities: dict[str, bool] | None = None,
     layers: list[dict[str, Any]] | None = None,
     icon_set: dict[str, Any] | None = None,
+    panel_url: str = "",
     history: Callable[..., Any] | None = None,
     action: Callable[..., Any] | None = None,
     coordinator: Any = None,
     signals: Iterable[str] | str | None = None,
-) -> FloorplanHubProvider:
+) -> SpatialHubProvider:
     """Register with the hub and wire up the whole lifecycle. One call.
 
     ``entry`` is your ConfigEntry: unregistration is hooked onto its unload,
@@ -95,8 +127,14 @@ def floorplan_provider(
 
     ``provider_id`` defaults to your integration's domain, which is exactly
     what you want unless you register more than one provider.
+
+    ``icon_set`` and ``panel_url`` are how your integration keeps its own
+    face: the icons your nodes are drawn with, and the panel the hub links
+    to from their popups. Both are optional and neither is interpreted --
+    the hub decides *where* things are drawn, you decide what they look
+    like, and Home Assistant stays the source of the data.
     """
-    provider = FloorplanHubProvider(
+    provider = SpatialHubProvider(
         hass,
         provider_id=provider_id or _domain_of(entry, name),
         name=name,
@@ -106,6 +144,7 @@ def floorplan_provider(
         capabilities=capabilities,
         layers=layers,
         icon_set=icon_set,
+        panel_url=panel_url,
         history=history,
         action=action,
     )
@@ -124,7 +163,7 @@ def floorplan_provider(
             # Silence here would be the cruellest outcome: the plan draws
             # once and then never moves, with nothing anywhere saying why.
             _LOGGER.warning(
-                "Floorplan-Hub: the coordinator passed by %s has no "
+                "Spatial Hub: the coordinator passed by %s has no "
                 "async_add_listener, so the hub will never hear about "
                 "changes. Pass signals=[...] with the dispatcher signals "
                 "you already fire, or call provider.async_notify() yourself",
@@ -253,11 +292,11 @@ def action(
 # ── The registration itself ───────────────────────────────────────────
 
 
-class FloorplanHubProvider:
+class SpatialHubProvider:
     """Announces one integration's spatial data to the hub, if present.
 
     Most integrations never touch this class directly -- use
-    :func:`floorplan_provider`, which builds it and wires the lifecycle.
+    :func:`spatial_provider`, which builds it and wires the lifecycle.
     """
 
     def __init__(
@@ -271,6 +310,7 @@ class FloorplanHubProvider:
         capabilities: dict[str, bool] | None = None,
         layers: list[dict[str, Any]] | None = None,
         icon_set: dict[str, Any] | None = None,
+        panel_url: str = "",
         history: Callable[..., Any] | None = None,
         action: Callable[..., Any] | None = None,
     ) -> None:
@@ -295,6 +335,10 @@ class FloorplanHubProvider:
             },
             "layers": layers or [],
             "icon_set": icon_set or {},
+            # Your own view, if you have one. The hub links to it from the
+            # popup of any node you produced, so a user who wants your
+            # full picture is one click away and comes back afterwards.
+            "panel_url": panel_url,
             "data": data,
         }
         if history is not None:
