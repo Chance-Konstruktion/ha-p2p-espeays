@@ -238,3 +238,84 @@ async def test_a_made_up_action_is_refused_rather_than_guessed(mesh):
     assert (await run("node", "unit-9", "explode", {}))["success"] is False
     assert (await run("node", HUB_ID, "resync", {}))["success"] is False
     assert coordinator.resynced == []
+
+
+# ── The doors in the popup ────────────────────────────────────────────
+
+
+def test_a_node_names_an_entity_so_the_popup_has_something_to_open(mesh):
+    """The popup came up empty in a real house: no more-info, no device
+    page, no way through to the settings. Nothing was broken -- nothing
+    had been offered. Naming one entity is what the hub builds all of it
+    from, and this integration never named one."""
+    from homeassistant.helpers import entity_registry as er
+
+    hass, _, _ = mesh
+    dr.registry.known.add(("espeasy_p2p", "unit-5"))
+    er.registry.entities["dev-unit-5"] = [
+        er.Entry("sensor.unit_5_temperature"),
+        er.Entry("switch.unit_5_relay"),
+    ]
+
+    node = next(n for n in _payload(hass)["nodes"] if n["id"] == "unit-5")
+    assert node["entity_id"] == "sensor.unit_5_temperature"
+
+
+def test_the_unit_opens_as_itself_not_as_its_uptime_counter(mesh):
+    from homeassistant.helpers import entity_registry as er
+
+    hass, _, _ = mesh
+    dr.registry.known.add(("espeasy_p2p", "unit-5"))
+    er.registry.entities["dev-unit-5"] = [
+        er.Entry("sensor.unit_5_uptime", entity_category="diagnostic"),
+        er.Entry("switch.unit_5_relay"),
+    ]
+
+    node = next(n for n in _payload(hass)["nodes"] if n["id"] == "unit-5")
+    assert node["entity_id"] == "switch.unit_5_relay", "diagnostics come last"
+
+
+def test_the_same_entity_is_named_on_every_refresh(mesh):
+    """A popup that reshuffles between two refreshes is a popup nobody
+    trusts."""
+    from homeassistant.helpers import entity_registry as er
+
+    hass, _, _ = mesh
+    dr.registry.known.add(("espeasy_p2p", "unit-5"))
+    er.registry.entities["dev-unit-5"] = [
+        er.Entry("switch.b"), er.Entry("sensor.a"), er.Entry("sensor.c"),
+    ]
+
+    first = next(n for n in _payload(hass)["nodes"] if n["id"] == "unit-5")
+    er.registry.entities["dev-unit-5"].reverse()
+    second = next(n for n in _payload(hass)["nodes"] if n["id"] == "unit-5")
+
+    assert first["entity_id"] == second["entity_id"] == "sensor.a"
+
+
+def test_a_unit_with_no_device_yet_names_nothing(mesh):
+    """Just heard from, not registered yet. Better silent than wrong."""
+    hass, _, _ = mesh
+
+    node = next(n for n in _payload(hass)["nodes"] if n["id"] == "unit-9")
+    assert not node.get("entity_id")
+
+
+def test_a_device_with_no_entities_names_nothing(mesh):
+    from homeassistant.helpers import entity_registry as er
+
+    hass, _, _ = mesh
+    dr.registry.known.add(("espeasy_p2p", "unit-5"))
+    er.registry.entities["dev-unit-5"] = []
+
+    node = next(n for n in _payload(hass)["nodes"] if n["id"] == "unit-5")
+    assert not node.get("entity_id")
+
+
+def test_the_area_still_comes_from_the_device(mesh):
+    """The entity lookup must not have cost the area on the way past."""
+    hass, _, _ = mesh
+    dr.registry.areas[("espeasy_p2p", "unit-5")] = "garage"
+
+    nodes = {n["id"]: n for n in _payload(hass)["nodes"]}
+    assert nodes["unit-5"]["area_id"] == "garage"
