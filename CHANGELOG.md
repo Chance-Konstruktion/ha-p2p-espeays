@@ -5,6 +5,30 @@ All notable changes to this integration are documented here. Dates use
 version numbers** (`YYMMDD`) instead of semver — they sort chronologically
 and the release date is obvious at a glance.
 
+## 260801
+
+### Added
+- **Spatial Hub integration**: if a Spatial Hub is installed, ESPEasy P2P
+  now draws its mesh on the floor plan — Home Assistant in the middle, one
+  edge to each discovered unit, coloured by how long ago that unit was last
+  heard from and dashed since node-to-node links are never measured, only
+  broadcast. A unit drifting off the mesh turns visible (amber) before it
+  actually goes silent. Areas are read from the device registry, so nothing
+  needs configuring twice. Requires no Spatial Hub to be installed — with
+  none present the adapter is a no-op.
+- **More-info popup now opens with content**: tapping an ESPEasy unit used
+  to open an empty frame. It now links to the unit's Home Assistant device
+  via one of its own entities, giving the popup entities, a device page,
+  and a settings link.
+- CI now runs the test suite (`pytest`) on every push.
+
+### Changed
+- Renamed the floor-plan feature and its vendored provider shim to
+  **Spatial Hub**, following the upstream hub's own rename
+  (`floorplan.py` → `spatial.py`). No stored state needed migrating since
+  neither side had shipped a release yet.
+- HACS now shows a curated `info.md` instead of the full GitHub README.
+
 ## 260617
 
 ### Added
