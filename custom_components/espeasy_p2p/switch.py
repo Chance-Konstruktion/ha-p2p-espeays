@@ -1,0 +1,337 @@
+"""Switch platform for ESPEasy P2P.
+
+Tasks whose value is named "State", "Output", "Relay" or "Switch" are exposed
+as toggleable switches. Toggling sends:
+    GET http://<node-ip>:<webport>/control?cmd=<taskname>,<0|1>
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import aiohttp
+
+from homeassistant.components.switch import SwitchEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.device_registry import DeviceInfo, format_mac
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
+
+from .const import (
+    DOMAIN,
+    SIGNAL_NODE_AVAILABILITY,
+    SIGNAL_TASK_DISCOVERED,
+    SIGNAL_VALUE_UPDATED,
+    SWITCH_VALUE_NAMES,
+)
+from .coordinator import ESPEasyP2PCoordinator
+from .entity_classification import classify_switch
+from .protocol import TaskConfig, TaskValues
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _is_switch_value(value_name: str) -> bool:
+    return value_name.strip().lower() in SWITCH_VALUE_NAMES
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator: ESPEasyP2PCoordinator = hass.data[DOMAIN][entry.entry_id]
+    known: set[tuple[int, int, int]] = set()
+
+    @callback
+    def _add_for_task(task: TaskConfig) -> None:
+        new_entities: list[ESPEasyP2PSwitch] = []
+        for value_index, value_name in enumerate(task.value_names):
+            if not value_name or not _is_switch_value(value_name):
+                continue
+            key = (task.src_unit, task.task_index, value_index)
+            if key in known:
+                continue
+            known.add(key)
+            new_entities.append(
+                ESPEasyP2PSwitch(
+                    coordinator=coordinator,
+                    entry_id=entry.entry_id,
+                    src_unit=task.src_unit,
+                    task_index=task.task_index,
+                    value_index=value_index,
+                )
+            )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass, f"{SIGNAL_TASK_DISCOVERED}_{entry.entry_id}", _add_for_task
+        )
+    )
+    for task in list(coordinator.tasks.values()):
+        _add_for_task(task)
+
+
+class ESPEasyP2PSwitch(SwitchEntity, RestoreEntity):
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry_id, src_unit, task_index, value_index):
+        self._coordinator = coordinator
+        self._entry_id = entry_id
+        self._src_unit = src_unit
+        self._task_index = task_index
+        self._value_index = value_index
+        self._attr_unique_id = f"espeasy_p2p_switch_{src_unit}_{task_index}_{value_index}"
+        node = coordinator.nodes.get(src_unit)
+        identifiers = {(DOMAIN, f"unit-{src_unit}")}
+        connections: set[tuple[str, str]] = set()
+        if node is not None and node.mac and node.mac != "00:00:00:00:00:00":
+            connections.add(("mac", format_mac(node.mac)))
+        self._attr_device_info = DeviceInfo(
+            identifiers=identifiers,
+            connections=connections,
+            name=node.name if node else f"ESPEasy unit {src_unit}",
+            manufacturer="ESPEasy",
+            model=node.node_type_name if node else None,
+            sw_version=str(node.build) if node else None,
+            configuration_url=(
+                f"http://{node.ip}:{node.web_port}"
+                if node and node.ip and node.ip != "0.0.0.0"
+                else None
+            ),
+        )
+
+    async def async_added_to_hass(self) -> None:
+        # Restore last known state so history shows correctly after restart.
+        if (last_state := await self.async_get_last_state()) is not None:
+            if last_state.state in ("on", "off"):
+                restored_value = 1.0 if last_state.state == "on" else 0.0
+                key = (self._src_unit, self._task_index)
+                values = list(self._coordinator.values.get(key) or [0.0, 0.0, 0.0, 0.0])
+                while len(values) <= self._value_index:
+                    values.append(0.0)
+                # Only restore if coordinator hasn't received a live value yet.
+                if key not in self._coordinator.values:
+                    values[self._value_index] = restored_value
+                    self._coordinator.values[key] = values
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_VALUE_UPDATED}_{self._entry_id}",
+                self._handle_update,
+            )
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_TASK_DISCOVERED}_{self._entry_id}",
+                self._handle_task_update,
+            )
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_NODE_AVAILABILITY}_{self._entry_id}",
+                self._handle_availability,
+            )
+        )
+
+    @callback
+    def _handle_availability(self, unit: int) -> None:
+        if unit == self._src_unit:
+            self.async_write_ha_state()
+
+    @callback
+    def _handle_update(self, payload: TaskValues) -> None:
+        if payload.src_unit != self._src_unit or payload.task_index != self._task_index:
+            return
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_task_update(self, task: TaskConfig) -> None:
+        if task.src_unit != self._src_unit or task.task_index != self._task_index:
+            return
+        self.async_write_ha_state()
+
+    @property
+    def name(self) -> str | None:
+        task = self._coordinator.tasks.get((self._src_unit, self._task_index))
+        if task and task.task_name:
+            return task.task_name
+        return f"Task {self._task_index}"
+
+    @property
+    def device_class(self):
+        return self._presentation().device_class
+
+    @property
+    def icon(self) -> str | None:
+        return self._presentation().icon
+
+    def _presentation(self):
+        task = self._coordinator.tasks.get((self._src_unit, self._task_index))
+        task_name = task.task_name if task else ""
+        value_name = ""
+        if task and 0 <= self._value_index < len(task.value_names):
+            value_name = task.value_names[self._value_index]
+        return classify_switch(task_name, value_name)
+
+    @property
+    def is_on(self) -> bool | None:
+        values = self._coordinator.values.get((self._src_unit, self._task_index))
+        if not values or self._value_index >= len(values):
+            return None
+        return values[self._value_index] >= 0.5
+
+    @property
+    def available(self) -> bool:
+        if not self._coordinator.is_unit_online(self._src_unit):
+            return False
+        node = self._coordinator.nodes.get(self._src_unit)
+        return node is not None and bool(node.ip) and node.ip != "0.0.0.0"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._send_command(1)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._send_command(0)
+
+    async def _send_command(self, state: int) -> None:
+        node = self._coordinator.nodes.get(self._src_unit)
+        if node is None or not node.ip or node.ip == "0.0.0.0":
+            _LOGGER.warning("Cannot toggle — no node info for unit %d", self._src_unit)
+            return
+        task = self._coordinator.tasks.get((self._src_unit, self._task_index))
+        task_name = (task.task_name if task else "") or f"task{self._task_index}"
+        # Real (firmware-reported) task/value names, used for RPiEasy's
+        # task-name-addressed command. Kept separate from the synthetic
+        # "task<idx>" fallback above so we don't send a bogus name.
+        real_task_name = task.task_name if task else ""
+        value_name = ""
+        if task and 0 <= self._value_index < len(task.value_names):
+            value_name = task.value_names[self._value_index]
+        gpio_pin = self._coordinator.get_gpio_pin(self._src_unit, task_name)
+        template = self._coordinator.get_command_template(
+            self._src_unit, task_name
+        )
+
+        # Build the candidate commands. We try them in order until one
+        # returns HTTP 200 with a body that looks like a real success.
+        # - User-supplied template wins over everything: it's an explicit
+        #   instruction and falling back would mask their intent.
+        # - "gpio,<pin>,<state>" works for "Switch input"/"Output Helper"
+        #   tasks (the most common setup with relays/pumps). RPiEasy needs
+        #   this form: it answers <taskname>,<state> with body 'False'.
+        # - "taskvaluesetandrun,<taskname>,<valuename>,<state>" is RPiEasy's
+        #   pin-free path: it sets the task value (driving the physical GPIO
+        #   for output plugins) and runs the task, which also publishes the
+        #   new state back over C013. This is what lets RPiEasy switches work
+        #   without the user having to hand-configure a GPIO pin, since
+        #   RPiEasy's /json does not expose the pin like ESPEasy does.
+        # - "<taskname>,<state>" works for plugins like "Generic Dummy"
+        #   or "Output - PWM Motor" that respond to their task name.
+        candidates: list[str] = []
+        if template:
+            candidates.append(_render_template(template, state))
+        else:
+            if gpio_pin is not None:
+                candidates.append(f"gpio,{gpio_pin},{state}")
+            if real_task_name and value_name:
+                candidates.append(
+                    f"taskvaluesetandrun,{real_task_name},{value_name},{state}"
+                )
+            candidates.append(f"{task_name},{state}")
+
+        # Fire-and-forget P2P (RPiEasy accepts type-0; stock ESPEasy ignores).
+        for cmd in candidates:
+            self._coordinator.send_p2p_command(node.ip, cmd)
+
+        # HTTP /control: try each candidate and stop at the first success.
+        url = f"http://{node.ip}:{node.web_port}/control"
+        session = async_get_clientsession(self.hass)
+        success = False
+        last_status: int | str = "n/a"
+        last_body = ""
+        last_cmd = ""
+        for cmd in candidates:
+            last_cmd = cmd
+            try:
+                async with session.get(
+                    url, params={"cmd": cmd}, timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    last_status = resp.status
+                    last_body = (await resp.text())[:200]
+                    if resp.status == 200 and _looks_like_success(last_body):
+                        success = True
+                        break
+            except (aiohttp.ClientError, TimeoutError) as err:
+                last_status = f"error: {err}"
+        _LOGGER.info(
+            "Switch unit=%d task=%r pin=%s state=%d -> success=%s last_cmd=%r http=%s body=%r",
+            self._src_unit, task_name, gpio_pin, state,
+            success, last_cmd, last_status, last_body,
+        )
+        if not success:
+            if template:
+                _LOGGER.warning(
+                    "Switch %r on unit %d: custom command template %r "
+                    "was rejected by the node (last body: %r). Edit it in "
+                    "the integration's options.",
+                    task_name, self._src_unit, template, last_body,
+                )
+            elif gpio_pin is None:
+                _LOGGER.warning(
+                    "Switch %r on unit %d has no known GPIO pin and the "
+                    "node rejected the task-name command. Open the "
+                    "integration's options to set a pin or a custom "
+                    "command template (e.g. event,%s={state}).",
+                    task_name, self._src_unit, task_name,
+                )
+            # Don't update local state — the relay didn't actually move.
+            self.async_write_ha_state()
+            return
+        values = list(self._coordinator.values.get((self._src_unit, self._task_index)) or [0.0, 0.0, 0.0, 0.0])
+        while len(values) <= self._value_index:
+            values.append(0.0)
+        values[self._value_index] = float(state)
+        self._coordinator.values[(self._src_unit, self._task_index)] = values
+        self.async_write_ha_state()
+        # The relay may switch itself back shortly (internal timer/pulse) after
+        # we turned it on. Re-read this one node a few times so HA catches the
+        # auto-off without waiting for the slow periodic poll.
+        if state:
+            self._coordinator.async_schedule_resync(self._src_unit)
+
+
+def _render_template(template: str, state: int) -> str:
+    """Render a command template by substituting the state placeholder.
+
+    Supports `{state}` (lowercase) and `{STATE}`. Anything else is left
+    untouched so users can still pass commands containing literal braces.
+    """
+    return template.replace("{state}", str(state)).replace("{STATE}", str(state))
+
+
+def _looks_like_success(body: str) -> bool:
+    """Heuristic: did the node actually execute the command?
+
+    RPiEasy answers an unknown task-name command with literal 'False'
+    (HTTP 200), and 'Unknown command' for unknown verbs. A successful
+    'gpio,N,X' returns either 'BCM<N> set to <X>' or a JSON log entry.
+    """
+    b = body.strip().lower()
+    if not b:
+        return False
+    if b in ("false", "0"):
+        return False
+    if "unknown" in b:
+        return False
+    return True

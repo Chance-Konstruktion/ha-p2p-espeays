@@ -1,0 +1,92 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ESPEasy P2P",
+        "description": "Empfängt ESPEasy C013 Broadcasts und sucht aktiv nach Peers.",
+        "data": {
+          "port": "UDP-Port",
+          "unit": "Unit-Nummer von Home Assistant",
+          "name": "Peer-Name von Home Assistant",
+          "display_precision": "Nachkommastellen für Sensorwerte (0–6)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Es kann nur ein ESPEasy P2P Listener konfiguriert werden."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Schalter-Konfiguration",
+        "description": "Task auswählen, um GPIO-Pin oder Command-Template zu setzen — oder 'Speichern und schließen' wählen, wenn alles passt. {task_count} Task(s) gelistet.",
+        "data": {
+          "display_precision": "Nachkommastellen für Sensorwerte (0–6)",
+          "task": "Task"
+        }
+      },
+      "edit": {
+        "title": "{task} auf Unit {unit} bearbeiten",
+        "description": "Entweder einen BCM-GPIO-Pin setzen (es wird 'gpio,PIN,STATE' geschickt) oder ein Command-Template — praktisch für Stock-ESPEasy mit Rules. Beispiele:\n\n• Stock ESPEasy + Rule: 'event,schluessel' triggert 'On schluessel do … endon' auf dem Node.\n• Direkter Helper: \"door,{state}\" (der Platzhalter {state} wird durch 0/1 ersetzt).\n\nWenn beide Felder gefüllt sind, gewinnt das Template. 'Eintrag entfernen' anhaken löscht die Override komplett.",
+        "data": {
+          "pin": "BCM-GPIO-Pin (optional)",
+          "cmd": "Command-Template (optional)",
+          "remove": "Eintrag entfernen"
+        }
+      }
+    }
+  },
+  "services": {
+    "scan": {
+      "name": "Knoten suchen",
+      "description": "Sendet ein Node-Info-Paket per Broadcast, damit alle ESPEasy-Knoten sich sofort melden."
+    },
+    "refetch_metadata": {
+      "name": "Task-Metadaten neu laden",
+      "description": "Erzwingt einen Refresh der /json-Metadaten für alle bekannten Knoten. Praktisch nach Updates der Integration, damit neu extrahierte Felder (z. B. GPIO-Pins) ohne HA-Neustart übernommen werden."
+    },
+    "send_command": {
+      "name": "Befehl an Knoten senden",
+      "description": "Sendet einen beliebigen ESPEasy-Befehl an einen bestimmten Knoten — sowohl per C013-P2P (Type-0) als auch per HTTP /control. Die HTTP-Antwort wird auf INFO geloggt, sodass nachvollziehbar ist, was der Knoten akzeptiert.",
+      "fields": {
+        "unit": {
+          "name": "Unit",
+          "description": "ESPEasy-Unit-Nummer des Ziel-Knotens."
+        },
+        "command": {
+          "name": "Befehl",
+          "description": "Befehl, exakt wie er nach `?cmd=` im Web-UI des Knotens stehen würde (z. B. `gpio,12,1`)."
+        }
+      }
+    },
+    "set_gpio_pin": {
+      "name": "GPIO-Pin für einen Task setzen",
+      "description": "Speichert dauerhaft ein (Unit, Task-Name) → GPIO-Pin-Mapping. Nötig für Firmware (vor allem RPiEasy 'Output Helper'), die den Pin nicht über /json ausliefert. Danach werden Toggles direkt als 'gpio,PIN,STATE' gesendet.",
+      "fields": {
+        "unit": {
+          "name": "Unit",
+          "description": "ESPEasy-Unit-Nummer des Ziel-Knotens."
+        },
+        "task_name": {
+          "name": "Task-Name",
+          "description": "Exakter TaskName wie im Knoten-UI angezeigt."
+        },
+        "pin": {
+          "name": "GPIO-Pin",
+          "description": "BCM-Pin-Nummer, die den Ausgang treibt."
+        }
+      }
+    },
+    "remove_node": {
+      "name": "Knoten entfernen",
+      "description": "Vergisst einen Knoten und entfernt das HA-Gerät, seine Sensoren und Schalter. Der Knoten taucht wieder auf, sobald er einen Heartbeat sendet.",
+      "fields": {
+        "unit": {
+          "name": "Unit",
+          "description": "Zu vergessende ESPEasy-Unit-Nummer."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,199 @@
+"""The ESPEasy P2P integration."""
+
+from __future__ import annotations
+
+import logging
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
+
+from .const import (
+    CONF_COMMAND_MAP,
+    CONF_GPIO_PIN_MAP,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_UNIT,
+    DEFAULT_NAME,
+    DEFAULT_PORT,
+    DEFAULT_UNIT,
+    DOMAIN,
+    SERVICE_REFETCH_METADATA,
+    SERVICE_REMOVE_NODE,
+    SERVICE_SCAN,
+    SERVICE_SEND_COMMAND,
+    SERVICE_SET_GPIO_PIN,
+)
+from .coordinator import ESPEasyP2PCoordinator
+from .spatial import async_setup_spatial
+
+_LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH]
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up ESPEasy P2P from a config entry."""
+    port = entry.data.get(CONF_PORT, DEFAULT_PORT)
+    unit = entry.data.get(CONF_UNIT, DEFAULT_UNIT)
+    name = entry.data.get(CONF_NAME, DEFAULT_NAME)
+    _LOGGER.debug(
+        "Loading ESPEasy P2P entry %s with port=%s unit=%s name=%s",
+        entry.entry_id, port, unit, name,
+    )
+    # If the entry was created by an older version of the integration with
+    # an empty data dict, persist the resolved defaults so the next reload
+    # has the correct values without surprises.
+    if not entry.data or any(
+        key not in entry.data for key in (CONF_PORT, CONF_UNIT, CONF_NAME)
+    ):
+        hass.config_entries.async_update_entry(
+            entry,
+            data={CONF_PORT: port, CONF_UNIT: unit, CONF_NAME: name},
+        )
+        _LOGGER.debug("Backfilled missing config entry data with defaults")
+    pin_overrides = dict(entry.options.get(CONF_GPIO_PIN_MAP, {}))
+    command_overrides = dict(entry.options.get(CONF_COMMAND_MAP, {}))
+    coordinator = ESPEasyP2PCoordinator(
+        hass,
+        entry.entry_id,
+        port,
+        unit,
+        name,
+        pin_overrides=pin_overrides,
+        command_overrides=command_overrides,
+    )
+    try:
+        await coordinator.async_start()
+    except OSError as err:
+        # Most commonly the UDP port is momentarily still held by a previous
+        # instance during a reload. Signal "not ready" so HA retries with
+        # backoff instead of failing the entry permanently.
+        raise ConfigEntryNotReady(
+            f"Could not bind UDP port {port}: {err}"
+        ) from err
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Optional: puts the mesh on Spatial Hub's plan when that is
+    # installed, and costs nothing when it is not.
+    async_setup_spatial(hass, entry, coordinator)
+
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SCAN):
+
+        async def _handle_scan(_call: ServiceCall) -> None:
+            for c in hass.data.get(DOMAIN, {}).values():
+                c.async_scan()
+
+        async def _handle_refetch(_call: ServiceCall) -> None:
+            for c in hass.data.get(DOMAIN, {}).values():
+                await c.async_refetch_metadata()
+
+        async def _handle_send_command(call: ServiceCall) -> None:
+            unit = int(call.data["unit"])
+            command = str(call.data["command"])
+            for c in hass.data.get(DOMAIN, {}).values():
+                if unit in c.nodes:
+                    await c.async_send_raw_command(unit, command)
+                    return
+            _LOGGER.warning("send_command: unit %d not found in any entry", unit)
+
+        async def _handle_set_gpio_pin(call: ServiceCall) -> None:
+            unit = int(call.data["unit"])
+            task_name = str(call.data["task_name"]).strip()
+            pin = int(call.data["pin"])
+            for entry_id, c in hass.data.get(DOMAIN, {}).items():
+                if unit not in c.nodes:
+                    continue
+                c.set_pin_override(unit, task_name, pin)
+                cfg_entry = hass.config_entries.async_get_entry(entry_id)
+                if cfg_entry is not None:
+                    new_options = dict(cfg_entry.options)
+                    new_options[CONF_GPIO_PIN_MAP] = dict(c.pin_overrides)
+                    hass.config_entries.async_update_entry(
+                        cfg_entry, options=new_options
+                    )
+                _LOGGER.info(
+                    "set_gpio_pin: unit=%d task=%r pin=%d (persisted)",
+                    unit, task_name, pin,
+                )
+                return
+            _LOGGER.warning("set_gpio_pin: unit %d not found", unit)
+
+        async def _handle_remove_node(call: ServiceCall) -> None:
+            unit = int(call.data["unit"])
+            for c in hass.data.get(DOMAIN, {}).values():
+                if await c.async_remove_node(unit):
+                    return
+            _LOGGER.warning("remove_node: unit %d not found", unit)
+
+        hass.services.async_register(DOMAIN, SERVICE_SCAN, _handle_scan)
+        hass.services.async_register(
+            DOMAIN, SERVICE_REFETCH_METADATA, _handle_refetch
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_SEND_COMMAND, _handle_send_command
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_SET_GPIO_PIN, _handle_set_gpio_pin
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_REMOVE_NODE, _handle_remove_node
+        )
+
+    return True
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow deleting a single ESPEasy node device from the HA UI.
+
+    Each discovered ESPEasy node is its own device (identifier ``unit-<n>``),
+    so users can delete or replace an individual node without removing and
+    re-adding the whole integration. We forget the node's in-memory state so
+    it only reappears if it sends a fresh Type-1 heartbeat afterwards;
+    returning True lets HA remove the device and its entities.
+    """
+    coordinator: ESPEasyP2PCoordinator | None = hass.data.get(DOMAIN, {}).get(
+        entry.entry_id
+    )
+    if coordinator is not None:
+        for domain, identifier in device_entry.identifiers:
+            if domain == DOMAIN and identifier.startswith("unit-"):
+                try:
+                    unit = int(identifier.removeprefix("unit-"))
+                except ValueError:
+                    continue
+                coordinator.forget_node_state(unit)
+                _LOGGER.info("Removed node unit=%d via device delete", unit)
+    return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload entry when options change (e.g. display precision)."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    coordinator: ESPEasyP2PCoordinator | None = hass.data.get(DOMAIN, {}).pop(
+        entry.entry_id, None
+    )
+    if coordinator is not None:
+        await coordinator.async_stop()
+    if not hass.data.get(DOMAIN):
+        hass.services.async_remove(DOMAIN, SERVICE_SCAN)
+        hass.services.async_remove(DOMAIN, SERVICE_REFETCH_METADATA)
+        hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
+        hass.services.async_remove(DOMAIN, SERVICE_SET_GPIO_PIN)
+        hass.services.async_remove(DOMAIN, SERVICE_REMOVE_NODE)
+    return unload_ok
