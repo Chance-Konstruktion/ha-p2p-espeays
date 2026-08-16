@@ -41,13 +41,30 @@ class KoordinatorDoppel:
     Absichtlich kein Nachbau der ganzen Klasse: Ein Doppel, das mehr kann
     als gebraucht wird, faellt beim naechsten Umbau nicht auf, sondern
     deckt ihn zu.
+
+    Die Liste stammt nicht aus dem Gedaechtnis, sondern aus dem Adapter::
+
+        grep -o "coordinator\\.[a-zA-Z_]*" custom_components/espeasy_p2p/spatial.py
+
+    Beim ersten Anlauf fehlte ``is_unit_online``, und der Konformitaetssatz
+    hat es gemeldet -- nicht als "Attribut fehlt", sondern als das, was es
+    im Betrieb waere: *data() raised AttributeError -- the hub would drop
+    your whole layer for that refresh.* Genau dieser Satz ist der Grund,
+    warum es diese Datei gibt.
     """
 
-    def __init__(self, nodes=None, last_seen=None):
+    def __init__(self, nodes=None, last_seen=None, offline=()):
         self.name = "Home Assistant"
         self.unit = 0
         self.nodes = nodes or {}
         self.last_seen = last_seen or {}
+        self._offline = set(offline)
+
+    def is_unit_online(self, unit: int) -> bool:
+        return unit not in self._offline
+
+    def async_schedule_resync(self, *args, **kwargs) -> None:
+        """Der Adapter stoesst eine Neuabfrage an; hier passiert nichts."""
 
 
 @pytest.fixture
@@ -73,13 +90,19 @@ def leer(hass: HomeAssistant, eintrag):
 
 @pytest.fixture
 def besetzt(hass: HomeAssistant, eintrag):
-    """Zwei Einheiten, eine davon stumm -- der Fall mit Kanten."""
+    """Zwei Einheiten, eine davon offline und nie gesehen.
+
+    Beides absichtlich gemischt: Der Knoten ohne ``last_seen`` laeuft durch
+    den Zweig, in dem die Stille unbekannt ist (``silent_for = None``) --
+    der Fall, in dem eine Rechnung mit None gern abstuerzt.
+    """
     return _registrierung(
         hass,
         eintrag,
         KoordinatorDoppel(
             nodes={1: {"name": "Keller"}, 2: {"name": "Dach"}},
             last_seen={1: 0.0},
+            offline=(2,),
         ),
     )
 
