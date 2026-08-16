@@ -30,9 +30,26 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from spatial_hub_conformance import check
 
+from custom_components.espeasy_p2p.protocol import NodeInfo
 from custom_components.espeasy_p2p.spatial import async_setup_spatial
 
 EIGENE_DOMAIN = "espeasy_p2p"
+
+
+def _einheit(unit: int, name: str) -> NodeInfo:
+    """Eine Einheit, wie der Koordinator sie fuehrt.
+
+    Bewusst die echte Datenklasse der Integration und kein eigenes
+    Woerterbuch: Beim ersten Anlauf stand hier ``{"name": ...}``, und der
+    Adapter liest ``info.name`` -- die Pipeline meldete "'dict' object has
+    no attribute 'name'". Mit NodeInfo bricht dieser Test, sobald sich das
+    Feld umbenennt, statt an einem Nachbau vorbeizulaufen.
+    """
+    return NodeInfo(
+        unit=unit, name=name, ip=f"192.168.1.{unit}",
+        mac=f"aa:bb:cc:dd:ee:{unit:02x}", build=20107,
+        node_type=1, web_port=80,
+    )
 
 
 class KoordinatorDoppel:
@@ -100,7 +117,7 @@ def besetzt(hass: HomeAssistant, eintrag):
         hass,
         eintrag,
         KoordinatorDoppel(
-            nodes={1: {"name": "Keller"}, 2: {"name": "Dach"}},
+            nodes={1: _einheit(1, "Keller"), 2: _einheit(2, "Dach")},
             last_seen={1: 0.0},
             offline=(2,),
         ),
