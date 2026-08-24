@@ -223,7 +223,7 @@ If the node is offline, the packet is silently dropped. HA marks the entity `una
 
 ## 🗺️ Spatial Hub
 
-If [Spatial Hub](https://github.com/Chance-Konstruktion/ha-spatial-hub) is
+If [Spatial Hub](https://gitlab.schanz.ipv64.net/chance-konstruktion/ha-spatial-hub) is
 installed, the mesh appears on the floor plan by itself — no card, no YAML,
 nothing to configure. If it is not installed, nothing here does anything at
 all: the adapter writes a dict into `hass.data` that nobody reads.
@@ -375,7 +375,7 @@ PRs and issues welcome. Especially:
 - **Tests** — `pytest` lives under `tests/`. Run `pytest -q` before pushing.
 
 ```bash
-git clone https://github.com/Chance-Konstruktion/ha-espeasy-p2p
+git clone https://gitlab.schanz.ipv64.net/chance-konstruktion/espeasy-p2p
 cd ha-espeasy-p2p
 pip install -r requirements_test.txt
 pytest -q
