@@ -42,6 +42,7 @@ from .protocol import (
     create_listener,
     detect_local_ip,
 )
+from .registry import device_for_unit
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -702,10 +703,7 @@ class ESPEasyP2PCoordinator:
             return False
         self.forget_node_state(unit)
         # Remove the device entry — HA will tear down its child entities.
-        registry = dr.async_get(self.hass)
-        device = registry.async_get_device(
-            identifiers={(DOMAIN, f"unit-{unit}")}
-        )
+        device = device_for_unit(self.hass, unit)
         if device is not None:
             ent_reg = er.async_get(self.hass)
             for ent in er.async_entries_for_device(

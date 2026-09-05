@@ -19,7 +19,6 @@ import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
 
 # Deliberately no import of the coordinator: this module reads five
 # attributes off it and nothing else, so typing it as Any keeps the
@@ -33,6 +32,7 @@ from .const import (
     SIGNAL_NODE_REMOVED,
 )
 from .spatial_hub_provider import action, edge, spatial_provider, node
+from .registry import device_for_unit
 
 # The hub's own node, so the star has a centre. Namespaced by the provider
 # id like everything else, so it cannot collide with a unit id.
@@ -61,9 +61,7 @@ def _device_of(hass: HomeAssistant, unit: int) -> Any:
     already had the chance to say where it hangs -- asking again in a
     floor-plan editor is the work this whole project exists to avoid.
     """
-    return dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, f"unit-{unit}")}
-    )
+    return device_for_unit(hass, unit)
 
 
 def _entity_of(hass: HomeAssistant, device: Any) -> str | None:
